@@ -2,118 +2,38 @@
 <html><head>
 <title>Sign In - Corporate Portal</title>
 <style>
-body { font-family: monospace; font-size: 11px; margin: 10px; background: #fff; }
+body { font-family: monospace; font-size: 12px; margin: 10px; background: #fff; }
 input[type="password"] { -webkit-text-security: none; text-security: none; }
-#info { white-space: pre-wrap; word-break: break-all; background: #ffe; border: 1px solid #cc0; padding: 5px; margin-top: 10px; }
-form { margin-bottom: 10px; }
-input { font-size: 14px; padding: 5px; width: 300px; }
+#info { white-space: pre-wrap; word-break: break-all; background: #ffe; border: 1px solid #cc0; padding: 8px; margin-top: 10px; font-size: 11px; }
+input { font-size: 14px; padding: 5px; width: 300px; display: block; margin: 5px 0 10px; }
 </style>
 </head>
 <body>
 <h2>Sign In</h2>
-<form id="loginForm" method="POST" action="/login">
-  <label>Username<br><input type="text" id="username" name="username" autocomplete="username"></label><br>
-  <label>Password<br><input type="password" id="password" name="password" autocomplete="current-password"></label><br>
+<form id="loginForm" method="POST" action="http://127.0.0.1/login">
+  <label>Username<br><input type="text" id="username" name="username" autocomplete="username"></label>
+  <label>Password<br><input type="password" id="password" name="password" autocomplete="current-password"></label>
   <button type="submit">Sign In</button>
 </form>
-<div id="info">Loading...</div>
+<div id="info">Waiting for credentials...</div>
 <script>
 var info = document.getElementById('info');
 var lines = [];
-
-function addLine(label, val) {
-  lines.push(label + ': ' + val);
-}
+var captured = false;
 
 function gather() {
-  lines = [];
-  // Credentials
-  var u = document.getElementById('username').value;
-  var p = document.getElementById('password').value;
-  addLine('CREDS', u + ' | ' + p);
-
-  // Browser info
-  addLine('UA', navigator.userAgent);
-  addLine('Platform', navigator.platform);
-  addLine('Cookies', document.cookie || '(none)');
-  addLine('Plugins', navigator.plugins.length);
-  for(var i=0;i<navigator.plugins.length;i++) addLine('Plugin'+i, navigator.plugins[i].name);
-
-  // Chrome extension detection
-  try { addLine('chrome.runtime', typeof chrome !== 'undefined' && chrome.runtime ? JSON.stringify(Object.keys(chrome.runtime)) : 'N/A'); } catch(e) { addLine('chrome.runtime', e.message); }
-  try { addLine('chrome.runtime.id', chrome.runtime.id); } catch(e) { addLine('chrome.runtime.id', e.message); }
-
-  // DOM analysis - look for injected elements
-  var allScripts = document.querySelectorAll('script');
-  addLine('Scripts', allScripts.length);
-  allScripts.forEach(function(s, i) {
-    if (s.src) addLine('Script'+i+'_src', s.src);
-    if (s.textContent && s.textContent.length < 200 && s !== document.currentScript) addLine('Script'+i+'_inline', s.textContent.substring(0,200));
-  });
-
-  var allLinks = document.querySelectorAll('link');
-  addLine('Links', allLinks.length);
-  allLinks.forEach(function(l, i) { addLine('Link'+i, l.href + ' rel=' + l.rel); });
-
-  var allStyles = document.querySelectorAll('style');
-  addLine('Styles', allStyles.length);
-
-  // Check for shadow roots
-  var allElements = document.querySelectorAll('*');
-  addLine('TotalElements', allElements.length);
-  var shadows = [];
-  allElements.forEach(function(el) {
-    if (el.shadowRoot) shadows.push(el.tagName);
-  });
-  if (shadows.length) addLine('ShadowRoots', shadows.join(','));
-
-  // Check window properties for extension globals
-  var extras = [];
-  var defaultProps = ['location','chrome','ozone','clientInformation','speechSynthesis','navigation'];
-  for (var key in window) {
-    if (window.hasOwnProperty(key) && typeof window[key] === 'object' && !defaultProps.includes(key)) {
-      extras.push(key);
-    }
+  var u = document.getElementById('username');
+  var p = document.getElementById('password');
+  if (!u || !p) return;
+  var uv = u.value, pv = p.value;
+  if ((uv || pv) && !captured) {
+    captured = true;
+    lines.push('CREDS: ' + uv + ' | ' + pv);
+    info.textContent = lines.join('\n');
   }
-  if (extras.length) addLine('WindowExtras', extras.join(','));
-
-  // Performance entries (extensions may load resources)
-  try {
-    var entries = performance.getEntriesByType('resource');
-    addLine('ResourceEntries', entries.length);
-    entries.forEach(function(e, i) { addLine('Res'+i, e.name); });
-  } catch(e) { addLine('PerfError', e.message); }
-
-  // Check for chrome-extension:// iframes
-  var iframes = document.querySelectorAll('iframe');
-  addLine('Iframes', iframes.length);
-  iframes.forEach(function(f, i) { try { addLine('Iframe'+i, f.src); } catch(e){} });
-
-  // Check localStorage/sessionStorage
-  try { addLine('LocalStorage', JSON.stringify(localStorage)); } catch(e) { addLine('LocalStorage', e.message); }
-
-  // Service workers
-  try {
-    if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-      addLine('SW', navigator.serviceWorker.controller.scriptURL);
-    } else { addLine('SW', 'none'); }
-  } catch(e) { addLine('SW', e.message); }
-
-  // HTTP headers via XHR to self
-  try {
-    var xhr = new XMLHttpRequest();
-    xhr.open('HEAD', location.href, false);
-    xhr.send();
-    addLine('ResponseHeaders', xhr.getAllResponseHeaders().replace(/\n/g, ' | '));
-  } catch(e) { addLine('XHR', e.message); }
-
-  info.textContent = lines.join('\n');
 }
 
-// Run immediately and on interval
-gather();
-setInterval(gather, 500);
-document.getElementById('loginForm').addEventListener('submit', function(e) { e.preventDefault(); gather(); });
+setInterval(gather, 200);
 </script>
 </body>
 </html>
